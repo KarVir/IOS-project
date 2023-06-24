@@ -1,0 +1,285 @@
+#!/bin/sh
+export POSIXLY_CORRECT=yes
+export LC_ALL=C
+
+	# autor: Karolína Virágová, xvirag00
+
+	if [ -z "$MOLE_RC" ]; then
+		echo Promena MOLE_RC neexistuje | awk '{print "\033[31m"$1" MOLE_RC neexistuje \033[0m"}'
+		echo nastaveni | awk '{print "\033[34m"$1" proměnné příkazem export MOLE_RC=\"MOLE_RC\" \033[0m"}'
+		exit 1
+	fi
+
+	# Nápověda 
+	help() { 
+		echo HELP | awk '{ print "\033[31m"$1" \033[0m";}'
+		echo mole | awk '{ print "\033[32m"$1" [-g group] file \033[0m";}' 
+		echo "Zadaný soubor bude otevřen."
+		echo "Pokud byl zadán přepínač -g, dané otevření souboru bude zároveň přiřazeno do skupiny s názvem GROUP."
+		echo "GROUP může být název jak existující, tak nové skupiny."		
+		echo přiklad | awk '{ print "\033[36m"$1":mole -g pozdravy ahoj.txt \033[0m";}'
+		echo "soubor ahoj.txt bude otevřen a zároveň mu bude přiřazena skupina pozdravy." 
+		echo "Také mu můžeme přiřadit skupinu s jiným názvem." 
+		echo mole | awk '{ print "\033[32m"$1" -m filters directory \033[0m";}'
+		echo "Pokud DIRECTORY odpovídá existujícímu adresáři, skript z daného adresáře vybere soubor, který má být otevřen." 
+		echo "Pokud nebyl zadán adresář předpokládá se aktuální adresáři."	
+		echo "Jestli bylo v adresáři editováno více souborů,vybere se soubor, který byl pomocí skriptu otevřen (editován) jako poslední."
+		echo "Byl-li zadán argument -m, vybere se soubor, který byl otevřen (editován) nejčastěji."
+		echo přiklad | awk '{ print "\033[36m"$1" nebo mole -m nebo mole -g bash ~ nebo mole -m -g tst nebo mole -a 2023-02-16 -b 2023-02-20 nebo \033[0m";}' 
+		
+		echo mole | awk '{ print "\033[32m"$1" list filters directory \033[0m";}'
+		echo "script zobrazí seznam souborů, které byly v daném adresáři editovány pomocí scriptu."
+		echo "Pokud nebyl zadán adresář, předpokládá se aktuální adresář"
+		echo "Seznam souborů může být filtrován pomocí filters."
+		echo přiklad | awk '{ print "\033[36m"$1" mole list nebo mole list -g bash nebo mole list -b 2023-02-20 nebo  mole list -a 2023-02-16 -b 2023-02-24 -g bash \033[0m";}' 
+		
+		echo ""
+		echo filters | awk '{ print "\033[32m"$1" může být kombinace následujících filtrů (každý může být uveden maximálně jednou): \033[0m";}'
+		echo [-g | awk '{ print "\033[36m"$1" GROUP1[,GROUP2[,...]]] \033[0m";}'
+		echo "soubor bude uvažován pouze tehdy, pokud jeho spoštění spadá alespoň do jedné z těchto skupin."
+		echo [-a | awk '{ print "\033[36m"$1"  DATE] \033[0m";}'
+		echo "záznamy o souborech před tímto datem nebudou uvažovány" 
+		echo [-b | awk '{ print "\033[36m"$1" DATE] \033[0m";}'
+		echo "záznamy o souborech po tomto datu nebudou uvažovány" 
+
+	}
+
+	# práce s argumentami
+	# parsovaní 	
+	for last; do true; done
+	if [ "$1" = "-h" ]; then
+			help		
+		if [ $# -eq 1 ]; then
+			exit 0
+		else
+			exit 1
+		fi
+				
+	elif [ "$1" = "list" ]; then
+		mode="list"
+		optstring="a:b:g:"
+		shift 1
+		while getopts ${optstring} arg; do
+	  	case "${arg}" in
+	    	a) after=$OPTARG ;;
+		    b) before=$OPTARG ;;
+		    g) group=$OPTARG ;;
+			?)
+				help
+			exit 1
+			;;
+		esac
+		done
+		
+		shift $((OPTIND - 1))	
+		if [ $# -eq 0 ]; then
+			:
+		elif [ $# -eq 1 ]; then
+				
+			if [ -d "$1" ]; then
+				DIRECTORY=$(realpath -e "$1")
+			else 
+				echo "$1 is not directory"	
+				exit 1
+			fi		
+		else
+			help
+			exit 1
+		fi
+
+	elif [ "$1" = "secret-log" ]; then
+		mode="secret-log"
+		optstring="a:b:"
+		shift 1 
+		while getopts ${optstring} arg; do
+	  	case "${arg}" in
+	    	a) after=$OPTARG ;;
+		    b) before=$OPTARG ;;
+			?)
+				help
+				exit 1
+			;;
+		esac
+		done
+		
+		shift $((OPTIND - 1))	
+		for DIRECTORY; do
+			if [ -d "$DIRECTORY" ]; then
+				directories="${directories},$(realpath -e "$DIRECTORY")"
+			else 
+				echo "$DIRECTORY is not directory"	
+				exit 1
+			fi		
+		done
+	
+	elif [ -f "$last" ];then
+		mode="file"  
+		file=$(realpath -e "$last")
+		if [ $# -eq 1 ]; then
+			:
+		elif [ $# -eq 3 ]; then
+			if [ "$1" = "-g" ]; then			
+				group="$2"
+			else
+                help
+				exit 1
+			fi
+		else
+			help
+			exit 1
+		fi	
+	else
+		mode="directory"
+		optstring="a:b:g:m"
+		
+		while getopts ${optstring} arg; do
+	  	case "${arg}" in
+	    	a) after=$OPTARG ;;
+		    b) before=$OPTARG ;;
+	    	g) group=$OPTARG ;;
+			m) mostfile=1;;
+			?) 
+				help
+				exit 1
+				;;
+		esac
+		done
+		
+		shift $((OPTIND - 1))	
+		if [ $# -eq 0 ]; then
+			DIRECTORY=$(pwd)
+		elif [ $# -eq 1 ]; then
+			if [ -d "$1" ]; then
+				DIRECTORY=$(realpath -e "$1")
+			else 
+				echo "$1 is not directory"	
+				exit 1
+			fi
+		else
+			help
+			exit 1
+		fi
+	fi
+		
+	
+	#Pokud je zadán soubor, soubor bude otevřen
+	#Pokud je spolu se souborem zadána skupina, soubor bude zároveń přiřazen do skupiny
+	if [ $mode = "file" ]; then
+		
+		DATE=$($BINSLOZKA/testdate "+%Y-%m-%d_%H-%M-%S")
+		
+		echo "$file,$DATE,$group" >> "$MOLE_RC"
+	# otevreni vybraneho souboru
+		if [ ! -z "$EDITOR" ]; then
+			$EDITOR "$file"
+		elif [ ! -z "$VISUAL" ]; then
+			$VISUAL "$file"
+		else 
+			vi "$file"
+		fi
+	
+	# vytvoření tajného komprimovaného logu s informacemi o editovaných souborech skrze script mole který bude uložen v adresáři .mole
+	elif [ $mode = "secret-log" ]; then 
+			DATE=$($BINSLOZKA/testdate "+%Y-%m-%d_%H-%M-%S")
+			USER=$(whoami)
+			exist_date=$(cat "$MOLE_RC")
+			 
+			# editovné soubory po tomto datu nebudou uvažovány
+			if [ ! -z "$before" ]; then
+				exist_date=$(echo "$exist_date"  | awk -F',' -v DATE="$before" '{ split($2 , date , "_"); if(DATE > date[1]) print $0}')
+			fi
+			
+			 # editovné soubory před tímto datem nebudou uvažovány
+			if [ ! -z "$after" ]; then
+				exist_date=$(echo "$exist_date" | awk -F',' -v DATE="$after" '{ split($2 , date , "_"); if(DATE < date[1]) print $0}' )
+			fi
+		
+			 # editovné soubory, které nepatří do daného soubory nebudou uvažovány
+			if [ ! -z "$directories" ]; then			
+				exist_date=$( echo "$exist_date" | awk -v directories="$directories" -F',' '{find_dir=0; split(directories, directory, "," ); split($1, dir, "/[^/]*$"); for(i in directory)if( dir[1] == directory[i]) find_dir=1; if(find_dir == 1) print $0}')
+			fi
+					
+			cd 
+			mkdir .mole 2> /dev/null
+								
+			
+		 	echo "$exist_date" | sort -d -f | awk -F',' ' END {print new_dir ";" dates } { if( $1 == new_dir ){dates=dates ";" $2} else{ if(NR!=1){print new_dir ";" dates}; new_dir = $1; dates=$2}}' | bzip2 >> .mole/log_"$USER"_"$DATE".bz2
+		
+	 # list,vybere soubory podle zadaných argumentů
+	elif [ $mode = "list" ]; then
+		  exist_date=$(cat "$MOLE_RC")
+		 	# editovné soubory po tomto datu nebudou uvažovány  
+		 	if [ ! -z "$before" ]; then
+				exist_date=$(echo "$exist_date"  | awk -F',' -v DATE="$before" '{ split($2 , date , "_"); if(DATE > date[1]) print $0}')
+			fi
+			
+			# editovné soubory po tomto datu nebudou uvažovány
+			if [ ! -z "$after" ]; then
+				exist_date=$(echo "$exist_date" | awk -F',' -v DATE="$after" '{ split($2 , date , "_"); if(DATE < date[1]) print $0}' )
+			fi
+
+			# editovné soubory, které nepatří do daného soubory nebudou uvažovány
+			if [ ! -z "$group" ]; then
+				exist_date=$(echo "$exist_date" | awk -F',' -v GROUPS="$group" '{find_group=0; split(GROUPS, groups , ","); for(i in groups) if($3 == groups[i]) find_group=1; if(find_group == 1) print $0 }')
+			fi
+			
+			if [ ! -z "$DIRECTORY" ]; then
+				exist_date=$( echo "$exist_date" | awk -v DIRECTORY="$DIRECTORY" -F',' '{split($1, dir, "/[^/]*$");  if(DIRECTORY == dir[1]) print $0}')
+			fi
+	
+			echo "$exist_date"| awk -F',' '{n=split($1, name, "/");print name[n] "," $3}' | sort -d -f | awk -F',' 'END {if(new_dir != ""){if(groups == ""){print new_dir ":;""-"}else{print new_dir ":;" groups}}} { if( $1 == new_dir){if($2 != last_group && $2 != ""){ if(groups == ""){ groups = $2; last_group=$2 }else {groups=groups "," $2; last_group= $2}}} else{ if(NR!=1){ if (groups == ""){print new_dir ":;""-"}else{print new_dir ":;" groups}}; new_dir = $1; groups=$2; last_group=$2}}'| column -s ";" -t -o " "
+		
+	#přepínač -m
+	elif [ $mode = "directory" ]; then
+	 	exist_date=$(cat "$MOLE_RC")
+	 	 		
+		# editovné soubory po tomto datu nebudou uvažovány	
+		if [ ! -z "$before" ]; then
+	 		exist_date=$(echo "$exist_date"  | awk -F',' -v DATE="$before" '{ split($2 , date , "_"); if(DATE > date[1]) print $0}')
+		fi
+	
+		# editovné soubory před tímto datem nebudou uvažovány	
+		if [ ! -z "$after" ]; then
+			exist_date=$(echo "$exist_date" | awk -F',' -v DATE="$after" '{ split($2 , date , "_"); if(DATE < date[1]) print $0}' )
+	 	fi	
+		
+		# editovné soubory,které nepatří do zadané skupiny nebudou uvažovány
+		if [ ! -z "$group" ]; then
+			exist_date=$(echo "$exist_date" | awk -F',' -v GROUPS="$group" '{find_group=0; split(GROUPS, groups , ","); for(i in groups) if($3 == groups[i]) find_group=1; if(find_group == 1) print $0 }')
+		fi	
+
+		if [ -z "$mostfile" ]; then 
+			#vybere posledni editovaný soubor v adresáři
+			last_file=$( echo "$exist_date" | awk -v DIRECTORY="$DIRECTORY" -F',' '{split($1, dir, "/[^/]*$");  if(DIRECTORY == dir[1]) print $0}' | tail -1 | awk -F',' '{printf $1}')
+				
+			if [ -z "$last_file" ]; then
+				echo "Nenalezeno"
+				exit 1
+			fi
+
+			if [ ! -z "$EDITOR" ]; then
+				$EDITOR "$last_file"
+			elif [ ! -z "$VISUAL" ]; then
+				$VISUAL "$last_file"
+			else
+				vi "$last_file"
+			fi	
+		else 
+			#vybere nejčastěji editovaný soubor
+			most_file=$(echo "$exist_date" | awk -F',' '{print $1}' | sort | uniq -c | sort -nk1 | tail -1 | awk '{ print $2 }')
+		
+			if [ -z "$most_file" ]; then
+				echo "Nenalezeno"
+				exit 1
+			fi
+			
+			if [ ! -z "$EDITOR" ]; then
+					$EDITOR "$most_file"
+			elif [ ! -z "$VISUAL" ]; then
+				$VISUAL "$most_file"
+			 else
+				vi "$most_file"
+			fi
+		fi	
+	fi
+
